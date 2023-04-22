@@ -1,30 +1,51 @@
+use authorization::basic::BasicAuthorization;
 use axum::{
-    async_trait,
-    extract::{rejection::TypedHeaderRejectionReason, FromRequestParts},
-    headers::{authorization::Basic, Authorization},
-    http::{request::Parts, StatusCode},
-    response::{IntoResponse, Response},
-    routing::{get, post},
-    Json, RequestPartsExt, Router, TypedHeader,
+    extract::State,
+    http::StatusCode,
+    routing::{get, put},
+    Json, Router,
 };
-use serde::{Deserialize, Serialize};
-use serde_json::json;
+use dto::user::User;
+use mongodb::{
+    options::{ClientOptions, Credential, ServerAddress},
+    Client,
+};
+
 use std::net::SocketAddr;
+
+use crate::repositories::user_repository::UserRepository;
+
+mod authorization;
+mod dto;
+mod repositories;
 
 #[tokio::main]
 async fn main() {
     // initialize tracing
     tracing_subscriber::fmt::init();
 
-    // build our application with a route
-    let app = Router::new()
-        // `GET /` goes to `root`
-        .route("/", get(root))
-        // `POST /users` goes to `create_user`
-        .route("/users", post(create_user));
+    let client = Client::with_options(
+        ClientOptions::builder()
+            .hosts(vec![ServerAddress::Tcp {
+                host: String::from("localhost"),
+                port: Some(27017),
+            }])
+            .credential(
+                Credential::builder()
+                    .username(String::from("root"))
+                    .password(String::from("example"))
+                    .build(),
+            )
+            .build(),
+    )
+    .unwrap();
 
-    // run our app with hyper
-    // `axum::Server` is a re-export of `hyper::Server`
+    let app = Router::new()
+        .route("/", get(root))
+        .route("/users/me", get(who_am_i))
+        .route("/users", put(create_user))
+        .with_state(client);
+
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
     tracing::debug!("listening on {}", addr);
     axum::Server::bind(&addr)
@@ -35,87 +56,32 @@ async fn main() {
 
 // basic handler that responds with a static string
 async fn root() -> &'static str {
-    "Hello, World!"
+    "Hello Axum!"
+}
+
+async fn who_am_i(
+    State(client): State<Client>,
+    authorized: BasicAuthorization,
+) -> (StatusCode, Json<Option<User>>) {
+    let result = UserRepository::using(client)
+        .get_by_username(authorized.user.username)
+        .await;
+
+    match result {
+        Ok(Some(user)) => (StatusCode::OK, Json(Some(user))),
+        Ok(None) => (StatusCode::NO_CONTENT, Json(None)),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, Json(None)),
+    }
 }
 
 async fn create_user(
-    // this argument tells axum to parse the request body
-    // as JSON into a `CreateUser` type
-    authorized: BasicAuthorization,
-    Json(payload): Json<CreateUser>,
-) -> (StatusCode, Json<User>) {
-    // insert your application logic here
-    let user = User {
-        id: 1337,
-        username: authorized.user.username,
-    };
+    State(client): State<Client>,
+    Json(to_create): Json<User>,
+) -> (StatusCode, Json<Option<User>>) {
+    let result = UserRepository::using(client).create(to_create).await;
 
-    // this will be converted into a JSON response
-    // with a status code of `201 Created`
-    (StatusCode::CREATED, Json(user))
-}
-
-#[async_trait]
-impl<S> FromRequestParts<S> for BasicAuthorization
-where
-    S: Send + Sync,
-{
-    type Rejection = AuthorizationError;
-
-    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        match parts.extract::<TypedHeader<Authorization<Basic>>>().await {
-            Ok(header) => {
-                let user = User {
-                    id: 1337,
-                    username: String::from(header.username()),
-                };
-                Ok(BasicAuthorization { user })
-            }
-            Err(error) => match error.reason() {
-                TypedHeaderRejectionReason::Missing => {
-                    Err(AuthorizationError::MissingAuthorization)
-                }
-                _ => Err(AuthorizationError::InvalidAuthorization),
-            },
-        }
+    match result {
+        Ok(created) => (StatusCode::CREATED, Json(Some(created))),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, Json(None)),
     }
-}
-
-impl IntoResponse for AuthorizationError {
-    fn into_response(self) -> Response {
-        let (status, error_message) = match self {
-            AuthorizationError::MissingAuthorization => {
-                (StatusCode::FORBIDDEN, "Missing authorization header")
-            }
-            AuthorizationError::InvalidAuthorization => {
-                (StatusCode::UNAUTHORIZED, "Invalid authorization header")
-            }
-        };
-
-        let body = Json(json!({ "error": error_message }));
-
-        (status, body).into_response()
-    }
-}
-
-// the input to our `create_user` handler
-#[derive(Deserialize)]
-struct CreateUser {
-    username: String,
-}
-
-// the output to our `create_user` handler
-#[derive(Serialize)]
-struct User {
-    id: u64,
-    username: String,
-}
-
-struct BasicAuthorization {
-    user: User,
-}
-
-enum AuthorizationError {
-    MissingAuthorization,
-    InvalidAuthorization,
 }

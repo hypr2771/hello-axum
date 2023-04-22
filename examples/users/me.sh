@@ -1,0 +1,1 @@
+curl -v -X GET http://localhost:3000/users/me -H 'Authorization: Basic dGVzdDp0ZXN0'
