@@ -1,0 +1,36 @@
+# cargo install drill
+# drill --benchmark stress.yml -o 5 --stats
+---
+
+concurrency: 100
+base: 'http://localhost:3000'
+iterations: 1000
+rampup: 0
+
+plan:
+  - name: Create user
+    request:
+      method: PUT
+      url: /users
+      body: '{"username": "test", "password": "test"}'
+      headers:
+        Content-Type: 'application/json'
+  
+  - name: Create topic
+    request:
+      method: PUT
+      url: /topics
+      body: '{"title": "my first time"}'
+      headers:
+        Content-Type: 'application/json'
+        Authorization: 'Basic dGVzdDp0ZXN0'
+    assign: topic
+  
+  - name: Create message
+    request:
+      method: PUT
+      url: /topics/{{ topic.body._id.$oid }}/messages
+      body: '{"content": "it was with rihana!"}'
+      headers:
+        Content-Type: 'application/json'
+        Authorization: 'Basic dGVzdDp0ZXN0'
