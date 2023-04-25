@@ -57,7 +57,13 @@ where
 
                 match db_user {
                     // User exists
-                    Ok(Some(existing)) => Ok(BasicAuthorization { user: existing }),
+                    Ok(Some(existing)) => {
+                        if existing.password == header.password() {
+                            Ok(BasicAuthorization { user: existing })
+                        } else {
+                            Err(AuthorizationError::InvalidAuthorization)
+                        }
+                    }
                     // User does not exists
                     _ => Err(AuthorizationError::InvalidAuthorization),
                 }

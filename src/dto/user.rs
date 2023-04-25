@@ -5,4 +5,5 @@ use serde::{Deserialize, Serialize};
 pub struct User {
     pub _id: Option<ObjectId>,
     pub username: String,
+    pub password: String,
 }
