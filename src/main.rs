@@ -3,7 +3,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     routing::{get, put},
-    Json, Router,
+    Error, Json, Router,
 };
 use dto::{message::Message, topic::Topic, user::User};
 use mongodb::{
@@ -66,27 +66,27 @@ async fn root() -> &'static str {
 async fn who_am_i(
     State(client): State<Client>,
     authorized: BasicAuthorization,
-) -> (StatusCode, Json<Option<User>>) {
+    ) -> Result<(StatusCode, Json<Option<User>>), StatusCode> {
     let result = UserRepository::using(client)
         .get_by_username(authorized.user.username)
         .await;
 
     match result {
-        Ok(Some(user)) => (StatusCode::OK, Json(Some(user))),
-        Ok(None) => (StatusCode::NO_CONTENT, Json(None)),
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, Json(None)),
+        Ok(Some(user)) => Ok((StatusCode::OK, Json(Some(user)))),
+        Ok(None) => Err(StatusCode::NO_CONTENT),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
 }
 
 async fn create_user(
     State(client): State<Client>,
     Json(to_create): Json<User>,
-) -> (StatusCode, Json<Option<User>>) {
+) -> Result<(StatusCode, Json<Option<User>>), StatusCode> {
     let result = UserRepository::using(client).create(to_create).await;
 
     match result {
-        Ok(created) => (StatusCode::CREATED, Json(Some(created))),
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, Json(None)),
+        Ok(created) => Ok((StatusCode::CREATED, Json(Some(created)))),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
 }
 
@@ -94,7 +94,7 @@ async fn create_topic(
     State(client): State<Client>,
     authorized: BasicAuthorization,
     Json(to_create): Json<Topic>,
-) -> (StatusCode, Json<Option<Topic>>) {
+) -> Result<(StatusCode, Json<Option<Topic>>), StatusCode> {
     let result = TopicRepository::using(client)
         .create(Topic {
             author: authorized.user._id,
@@ -103,8 +103,8 @@ async fn create_topic(
         .await;
 
     match result {
-        Ok(created) => (StatusCode::CREATED, Json(Some(created))),
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, Json(None)),
+        Ok(created) => Ok((StatusCode::CREATED, Json(Some(created)))),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
 }
 
@@ -113,7 +113,7 @@ async fn create_message(
     authorized: BasicAuthorization,
     Path(topic): Path<String>,
     Json(to_create): Json<Message>,
-) -> (StatusCode, Json<Option<Message>>) {
+) -> Result<(StatusCode, Json<Option<Message>>), StatusCode> {
     let topic = ObjectId::parse_str(topic);
 
     match topic {
@@ -133,14 +133,14 @@ async fn create_message(
                         .await;
 
                     match result {
-                        Ok(created) => (StatusCode::CREATED, Json(Some(created))),
-                        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, Json(None)),
+                        Ok(created) => Ok((StatusCode::CREATED, Json(Some(created)))),
+                        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
                     }
                 }
-                Ok(None) => (StatusCode::NOT_FOUND, Json(None)),
-                Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, Json(None)),
+                Ok(None) => Err(StatusCode::NOT_FOUND),
+                Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
             }
         }
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, Json(None)),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
 }
