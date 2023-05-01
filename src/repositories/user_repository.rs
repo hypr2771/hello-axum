@@ -1,10 +1,11 @@
+use futures::StreamExt;
 use mongodb::{
     bson::{doc, oid::ObjectId},
     error::Error,
     Client, Collection,
 };
 
-use crate::dto::user::User;
+use crate::dto::user::{User, UserWithoutPassword};
 
 pub struct UserRepository {
     collection: Collection<User>,
@@ -35,5 +36,29 @@ impl UserRepository {
             .insert_one(to_create.clone(), None)
             .await
             .map(|_| to_create)
+    }
+
+    pub async fn find_all_by_id(
+        &self,
+        authors: Vec<ObjectId>,
+    ) -> Result<Vec<UserWithoutPassword>, Error> {
+        let users = self
+            .collection
+            .find(doc! {"_id": {"$in":authors.clone()}}, None)
+            .await;
+
+        match users {
+            Ok(users) => {
+                let users: Vec<Result<User, Error>> = users.collect().await;
+
+                Ok(users
+                    .into_iter()
+                    .filter(|with_erroneous| with_erroneous.is_ok())
+                    .map(|only_successes| only_successes.ok().unwrap())
+                    .map(|users| users.without_password())
+                    .collect())
+            }
+            Err(e) => Err(e),
+        }
     }
 }

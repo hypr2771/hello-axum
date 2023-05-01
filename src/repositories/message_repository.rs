@@ -1,10 +1,14 @@
+use futures::StreamExt;
 use mongodb::{
-    bson::{oid::ObjectId, DateTime},
+    bson::{doc, oid::ObjectId, DateTime},
     error::Error,
+    options::FindOptions,
     Client, Collection,
 };
 
 use crate::dto::message::Message;
+
+const PAGE_SIZE: u64 = 25;
 
 pub struct MessageRepository {
     collection: Collection<Message>,
@@ -28,5 +32,32 @@ impl MessageRepository {
             .insert_one(hydrated.clone(), None)
             .await
             .map(|_| hydrated)
+    }
+
+    pub async fn find_for_topic(&self, topic: ObjectId, page: u64) -> Result<Vec<Message>, Error> {
+        let messages = self
+            .collection
+            .find(
+                doc! {"topic": Some(topic)},
+                FindOptions::builder()
+                    .skip(PAGE_SIZE * page)
+                    .limit(PAGE_SIZE as i64)
+                    .sort(doc! {"publication": 1})
+                    .build(),
+            )
+            .await;
+
+        match messages {
+            Ok(messages) => {
+                let messages: Vec<Result<Message, Error>> = messages.collect().await;
+
+                Ok(messages
+                    .into_iter()
+                    .filter(|with_erroneous| with_erroneous.is_ok())
+                    .map(|only_successes| only_successes.ok().unwrap())
+                    .collect())
+            }
+            Err(e) => Err(e),
+        }
     }
 }

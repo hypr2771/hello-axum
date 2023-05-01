@@ -2,9 +2,9 @@
 # drill --benchmark stress.yml -o 5 --stats
 ---
 
-concurrency: 100
+concurrency: 1
 base: 'http://localhost:3000'
-iterations: 1000
+iterations: 1
 rampup: 0
 
 plan:
@@ -34,3 +34,29 @@ plan:
       headers:
         Content-Type: 'application/json'
         Authorization: 'Basic dGVzdDp0ZXN0'
+
+  - name: Create message
+    request:
+      method: PUT
+      url: /topics/{{ topic.body._id.$oid }}/messages
+      body: '{"content": "or was it?"}'
+      headers:
+        Content-Type: 'application/json'
+        Authorization: 'Basic dGVzdDp0ZXN0'
+
+  - name: Create user
+    request:
+      method: PUT
+      url: /users
+      body: '{"username": "second tester", "password": "second tester"}'
+      headers:
+        Content-Type: 'application/json'
+
+  - name: Create message
+    request:
+      method: PUT
+      url: /topics/{{ topic.body._id.$oid }}/messages
+      body: '{"content": "yes bro it was!"}'
+      headers:
+        Content-Type: 'application/json'
+        Authorization: 'Basic c2Vjb25kIHRlc3RlcjpzZWNvbmQgdGVzdGVy'

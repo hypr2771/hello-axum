@@ -1,17 +1,22 @@
 use authorization::basic::BasicAuthorization;
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::{get, put},
-    Error, Json, Router,
+    Json, Router,
 };
-use dto::{message::Message, topic::Topic, user::User};
+use dto::{
+    message::Message,
+    topic::{Topic, TopicWithMessages},
+    user::User,
+};
 use mongodb::{
     bson::oid::ObjectId,
     options::{ClientOptions, Credential, ServerAddress},
     Client,
 };
 use repositories::{message_repository::MessageRepository, topic_repository::TopicRepository};
+use serde::Deserialize;
 
 use std::net::SocketAddr;
 
@@ -47,6 +52,8 @@ async fn main() {
         .route("/users/me", get(who_am_i))
         .route("/users", put(create_user))
         .route("/topics", put(create_topic))
+        .route("/topics", get(get_topics))
+        .route("/topics/:topic", get(get_topic))
         .route("/topics/:topic/messages", put(create_message))
         .with_state(client);
 
@@ -66,7 +73,7 @@ async fn root() -> &'static str {
 async fn who_am_i(
     State(client): State<Client>,
     authorized: BasicAuthorization,
-    ) -> Result<(StatusCode, Json<Option<User>>), StatusCode> {
+) -> Result<(StatusCode, Json<Option<User>>), StatusCode> {
     let result = UserRepository::using(client)
         .get_by_username(authorized.user.username)
         .await;
@@ -74,7 +81,10 @@ async fn who_am_i(
     match result {
         Ok(Some(user)) => Ok((StatusCode::OK, Json(Some(user)))),
         Ok(None) => Err(StatusCode::NO_CONTENT),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+        Err(e) => {
+            tracing::warn!("Unexpected exception {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
     }
 }
 
@@ -86,7 +96,10 @@ async fn create_user(
 
     match result {
         Ok(created) => Ok((StatusCode::CREATED, Json(Some(created)))),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+        Err(e) => {
+            tracing::warn!("Unexpected exception {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
     }
 }
 
@@ -104,7 +117,114 @@ async fn create_topic(
 
     match result {
         Ok(created) => Ok((StatusCode::CREATED, Json(Some(created)))),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+        Err(e) => {
+            tracing::warn!("Unexpected exception {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+async fn get_topics(
+    State(client): State<Client>,
+    Query(paged): Query<Paged>,
+) -> Result<(StatusCode, Json<Option<Vec<Topic>>>), StatusCode> {
+    let topics = TopicRepository::using(client).get(paged.page).await;
+
+    match topics {
+        Ok(topics) => Ok((StatusCode::CREATED, Json(Some(topics)))),
+        Err(e) => {
+            tracing::warn!("Unexpected exception {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+async fn get_topic(
+    State(client): State<Client>,
+    Query(paged): Query<Paged>,
+    Path(topic): Path<String>,
+) -> Result<(StatusCode, Json<Option<TopicWithMessages>>), StatusCode> {
+    let topic = ObjectId::parse_str(topic);
+
+    match topic {
+        Ok(topic) => {
+            let topic = TopicRepository::using(client.clone())
+                .get_by_id(topic)
+                .await;
+
+            match topic {
+                Ok(Some(topic)) => {
+                    let messages = MessageRepository::using(client.clone())
+                        .find_for_topic(topic._id.unwrap(), paged.page)
+                        .await;
+
+                    match messages {
+                        Ok(mut messages) => {
+                            let mut dinstinct_authors: Vec<ObjectId> = messages
+                                .clone()
+                                .into_iter()
+                                .map(|messages| messages.author.unwrap())
+                                .map(|author_id| author_id)
+                                .collect();
+
+                            dinstinct_authors.dedup();
+
+                            let authors = UserRepository::using(client.clone())
+                                .find_all_by_id(dinstinct_authors)
+                                .await;
+
+                            match authors {
+                                Ok(authors) => {
+                                    let mut messages_with_author = vec![];
+
+                                    while let Some(message) = messages.pop() {
+                                        for author in authors.clone().into_iter() {
+                                            if author._id.eq(&message.author.unwrap()) {
+                                                messages_with_author.insert(
+                                                    0,
+                                                    Message { ..message.clone() }
+                                                        .with_author(&author),
+                                                );
+                                            }
+                                        }
+                                    }
+
+                                    Ok((
+                                        StatusCode::OK,
+                                        Json(Some(topic.with_messages(messages_with_author))),
+                                    ))
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "Could not get authors of messages of topic {}: {}",
+                                        topic._id.unwrap(),
+                                        e
+                                    );
+                                    Err(StatusCode::INTERNAL_SERVER_ERROR)
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Could not get messages of topic {}: {}",
+                                topic._id.unwrap(),
+                                e
+                            );
+                            Err(StatusCode::INTERNAL_SERVER_ERROR)
+                        }
+                    }
+                }
+                Ok(None) => Err(StatusCode::NOT_FOUND),
+                Err(e) => {
+                    tracing::warn!("Could not get topic: {}", e);
+                    Err(StatusCode::INTERNAL_SERVER_ERROR)
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Could not parse topic ID: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
     }
 }
 
@@ -134,13 +254,27 @@ async fn create_message(
 
                     match result {
                         Ok(created) => Ok((StatusCode::CREATED, Json(Some(created)))),
-                        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+                        Err(e) => {
+                            tracing::warn!("Unexpected exception {}", e);
+                            Err(StatusCode::INTERNAL_SERVER_ERROR)
+                        }
                     }
                 }
                 Ok(None) => Err(StatusCode::NOT_FOUND),
-                Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+                Err(e) => {
+                    tracing::warn!("Unexpected exception {}", e);
+                    Err(StatusCode::INTERNAL_SERVER_ERROR)
+                }
             }
         }
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+        Err(e) => {
+            tracing::warn!("Unexpected exception {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
     }
+}
+
+#[derive(Deserialize)]
+struct Paged {
+    page: u64,
 }

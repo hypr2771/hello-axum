@@ -7,3 +7,18 @@ pub struct User {
     pub username: String,
     pub password: String,
 }
+
+impl User {
+    pub fn without_password(self) -> UserWithoutPassword {
+        UserWithoutPassword {
+            _id: self._id.unwrap(),
+            username: self.username,
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+pub struct UserWithoutPassword {
+    pub _id: ObjectId,
+    pub username: String,
+}
